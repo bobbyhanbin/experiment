@@ -38,7 +38,7 @@ def train(log_dir,train_interval, train_start_frame):
     network = S2Model()
     network = network.to(DEVICE)
     optimizer = torch.optim.Adam(network.parameters(), lr=LEARNING_RATE)
-    ctriterion = nn.MSELoss()
+    ctriterion = nn.SmoothL1Loss()
     ctriterion = ctriterion.to(DEVICE)
 
     for epoch in range(NUM_EPOCHS):
@@ -62,7 +62,7 @@ def train(log_dir,train_interval, train_start_frame):
             print('\rEpoch [{0}/{1}], Iter [{2}] Loss: {3:.4f}'.format(
                 epoch + 1, NUM_EPOCHS, batch_idx + 1, loss.item()), end="")
         print("")
-    torch.save(network.state_dict(), './s2model_param_v3_scorelayer.pkl')
+    torch.save(network.state_dict(), './s2model_param_v4_lose.pkl')
     print("done")
         # print("")
         # preds = []
@@ -103,7 +103,7 @@ def test(log_dir, test_interval, test_start_frame):
     targets = []
     network = S2Model()
     network = network.to(DEVICE)
-    network.load_state_dict(torch.load('./s2model_param_v3_scorelayer.pkl'))
+    network.load_state_dict(torch.load('./s2model_param_v4_lose.pkl'))
     network.eval()
 
     length = len(test_set)
@@ -127,8 +127,8 @@ def test(log_dir, test_interval, test_start_frame):
     video_cnt = len(test_set.cum_frame_num)
     pred = [preds[test_set.cum_frame_num_prev[i]:test_set.cum_frame_num[i]].mean() for i in range(video_cnt)]   # the average score of each video
     targets = [targets[test_set.cum_frame_num_prev[i]:test_set.cum_frame_num[i]].mean() for i in range(video_cnt)]
-    np.savetxt(os.path.join(log_dir, 'test_pred_scores_v3.txt'), np.array(pred))
-    np.savetxt(os.path.join(log_dir, 'test_targets_v3.txt'), np.array(targets))
+    np.savetxt(os.path.join(log_dir, 'test_pred_scores_v4.txt'), np.array(pred))
+    np.savetxt(os.path.join(log_dir, 'test_targets.txt'), np.array(targets))
     srocc, _ = scipy.stats.spearmanr(pred, targets)
     print(srocc)
 
