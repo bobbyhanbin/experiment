@@ -38,8 +38,10 @@ def train(log_dir,train_interval, train_start_frame):
     network = S2Model()
     network = network.to(DEVICE)
     optimizer = torch.optim.Adam(network.parameters(), lr=LEARNING_RATE)
-    ctriterion = nn.SmoothL1Loss()
-    ctriterion = ctriterion.to(DEVICE)
+    ctriterion1 = nn.SmoothL1Loss()
+    ctriterion2 = nn.KLDivLoss()
+    ctriterion1 = ctriterion1.to(DEVICE)
+    ctriterion2 = ctriterion1.to(DEVICE)
 
     for epoch in range(NUM_EPOCHS):
         for batch_idx, img_tuple in enumerate(train_loader):
@@ -55,14 +57,14 @@ def train(log_dir,train_interval, train_start_frame):
             target = target.to(DEVICE)
 
             pred = network(img_s2)
-            loss = ctriterion(pred, target)
+            loss = ctriterion1(pred, target) + ctriterion2(pred, target)
             loss.backward()
 
             optimizer.step()
             print('\rEpoch [{0}/{1}], Iter [{2}] Loss: {3:.4f}'.format(
                 epoch + 1, NUM_EPOCHS, batch_idx + 1, loss.item()), end="")
         print("")
-    torch.save(network.state_dict(), './s2model_param_v4_lose.pkl')
+    torch.save(network.state_dict(), './s2model_param_v6_addklloss.pkl')
     print("done")
         # print("")
         # preds = []
@@ -103,7 +105,7 @@ def test(log_dir, test_interval, test_start_frame):
     targets = []
     network = S2Model()
     network = network.to(DEVICE)
-    network.load_state_dict(torch.load('./s2model_param_v4_lose.pkl'))
+    network.load_state_dict(torch.load('./s2model_param_v6_addklloss.pkl'))
     network.eval()
 
     length = len(test_set)
@@ -127,7 +129,7 @@ def test(log_dir, test_interval, test_start_frame):
     video_cnt = len(test_set.cum_frame_num)
     pred = [preds[test_set.cum_frame_num_prev[i]:test_set.cum_frame_num[i]].mean() for i in range(video_cnt)]   # the average score of each video
     targets = [targets[test_set.cum_frame_num_prev[i]:test_set.cum_frame_num[i]].mean() for i in range(video_cnt)]
-    np.savetxt(os.path.join(log_dir, 'test_pred_scores_v4.txt'), np.array(pred))
+    np.savetxt(os.path.join(log_dir, 'test_pred_scores_v6.txt'), np.array(pred))
     np.savetxt(os.path.join(log_dir, 'test_targets.txt'), np.array(targets))
     srocc, _ = scipy.stats.spearmanr(pred, targets)
     print(srocc)
@@ -146,29 +148,43 @@ class S2Model(nn.Module):
         )
 
         grid_so3 = so3_near_identity_grid(max_beta=np.pi / 32, max_gamma=0, n_alpha=4, n_beta=2, n_gamma=1)
-        self.layer1 = nn.Sequential(
-            SO3Convolution(16, 32, 64, 64, grid_so3),
+        self.layer1= nn.Sequential(
+            SO3Convolution(16, 16, 64, 32, grid_so3),
+            nn.GroupNorm(1, 16),
+            nn.LeakyReLU(self.leaky_alpha, inplace=True),
+            SO3Convolution(16, 32, 32, 32, grid_so3),
+            nn.GroupNorm(2, 32),
+            nn.LeakyReLU(self.leaky_alpha, inplace=True)
+
+        )
+        grid_so3 = so3_near_identity_grid(max_beta=np.pi / 16, max_gamma=0, n_alpha=4, n_beta=2, n_gamma=1)
+        self.layer2 = nn.Sequential(
+            SO3Convolution(32, 32, 32, 16, grid_so3),
             nn.GroupNorm(2, 32),
             nn.LeakyReLU(self.leaky_alpha, inplace=True),
-        )
-        self.layer2 = nn.Sequential(
-            SO3Convolution(32, 64, 64, 32, grid_so3),
+            SO3Convolution(32, 64, 16, 16, grid_so3),
             nn.GroupNorm(4, 64),
-            nn.LeakyReLU(self.leaky_alpha, inplace=True)
+            nn.LeakyReLU(self.leaky_alpha, inplace=True),
+
         )
+        grid_so3 = so3_near_identity_grid(max_beta=np.pi / 8, max_gamma=0, n_alpha=4, n_beta=2, n_gamma=1)
         self.layer3 = nn.Sequential(
-            SO3Convolution(64, 64, 32, 32, grid_so3),
+            SO3Convolution(64, 64, 16, 8, grid_so3),
             nn.GroupNorm(4, 64),
-            nn.LeakyReLU(self.leaky_alpha, inplace=True)
+            nn.LeakyReLU(self.leaky_alpha, inplace=True),
+            SO3Convolution(64, 128, 8, 8, grid_so3),
+            nn.GroupNorm(8, 128),
+            nn.LeakyReLU(self.leaky_alpha, inplace=True),
         )
+        grid_so3 = so3_near_identity_grid(max_beta=np.pi / 16, max_gamma=0, n_alpha=4, n_beta=2, n_gamma=1)
         self.layer4 = nn.Sequential(
-            SO3Convolution(64, 32, 32, 16, grid_so3),
+            SO3Convolution(128, 128, 8, 8, grid_so3),
             nn.GroupNorm(2, 32),
             nn.LeakyReLU(self.leaky_alpha, inplace=True)
         )
 
         self.score_layers = nn.Sequential(
-            nn.Conv2d(32, 64, 3, stride=2, padding=1, bias=False),
+            nn.Conv2d(128, 64, 3, stride=2, padding=1, bias=False),
             nn.BatchNorm2d(64),
             nn.MaxPool2d(2, 2),
             nn.LeakyReLU(self.leaky_alpha, inplace=True),
@@ -187,11 +203,17 @@ class S2Model(nn.Module):
 
 
     def forward(self, x):
-        x = self.layer0(x)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
+        # x = self.layer0(x)
+        # x = self.layer1(x)
+        # x = self.layer2(x)
+        # x = self.layer3(x)
+        # x = self.layer4(x)
+        # x = x.mean(-1)
+        # x = self.score_layers(x)
+        # x = x.view(batch_size, -1)
+        # y = self.fc(x)
+        for layer in (self.layer0, self.layer1, self.layer2, self.layer3):
+            x = layer(x)
         x = x.mean(-1)
         x = self.score_layers(x)
         x = x.view(batch_size, -1)
@@ -199,5 +221,5 @@ class S2Model(nn.Module):
         return y
 
 if __name__=="__main__":
-    # train(log_dir='./log', train_interval=2, train_start_frame=10)
-    test(log_dir='./log', test_interval=2, test_start_frame=1)
+    train(log_dir='./log', train_interval=2, train_start_frame=10)
+    # test(log_dir='./log', test_interval=2, test_start_frame=1)
