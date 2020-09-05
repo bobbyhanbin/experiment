@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import torch
+import torch.nn as nn
 import torch.cuda
 import torch.utils.data
 import logging
@@ -11,7 +12,6 @@ import matplotlib.pyplot as plt
 import scipy.stats
 from tqdm import tqdm
 from dataset.dataset_VQA_ODV import DS_VQA_ODV, VQA_ODV_Transform
-import torch.nn as nn
 from s2cnn import s2_near_identity_grid, S2Convolution, SO3Convolution, so3_near_identity_grid
 from s2cnn import so3_integrate
 from torch.backends import cudnn
@@ -64,7 +64,7 @@ def train(log_dir,train_interval, train_start_frame):
             print('\rEpoch [{0}/{1}], Iter [{2}] Loss: {3:.4f}'.format(
                 epoch + 1, NUM_EPOCHS, batch_idx + 1, loss.item()), end="")
         print("")
-    torch.save(network.state_dict(), './s2model_param_v6_addklloss.pkl')
+    torch.save(network.state_dict(), './s2model_param_v8_cat.pkl')
     print("done")
         # print("")
         # preds = []
@@ -105,7 +105,7 @@ def test(log_dir, test_interval, test_start_frame):
     targets = []
     network = S2Model()
     network = network.to(DEVICE)
-    network.load_state_dict(torch.load('./s2model_param_v6_addklloss.pkl'))
+    network.load_state_dict(torch.load('./s2model_param_v8_cat.pkl'))
     network.eval()
 
     length = len(test_set)
@@ -129,7 +129,7 @@ def test(log_dir, test_interval, test_start_frame):
     video_cnt = len(test_set.cum_frame_num)
     pred = [preds[test_set.cum_frame_num_prev[i]:test_set.cum_frame_num[i]].mean() for i in range(video_cnt)]   # the average score of each video
     targets = [targets[test_set.cum_frame_num_prev[i]:test_set.cum_frame_num[i]].mean() for i in range(video_cnt)]
-    np.savetxt(os.path.join(log_dir, 'test_pred_scores_v6.txt'), np.array(pred))
+    np.savetxt(os.path.join(log_dir, 'test_pred_scores_v8.txt'), np.array(pred))
     np.savetxt(os.path.join(log_dir, 'test_targets.txt'), np.array(targets))
     srocc, _ = scipy.stats.spearmanr(pred, targets)
     print(srocc)
@@ -148,7 +148,7 @@ class S2Model(nn.Module):
         )
 
         grid_so3 = so3_near_identity_grid(max_beta=np.pi / 32, max_gamma=0, n_alpha=4, n_beta=2, n_gamma=1)
-        self.layer1= nn.Sequential(
+        self.layer1 = nn.Sequential(
             SO3Convolution(16, 16, 64, 32, grid_so3),
             nn.GroupNorm(1, 16),
             nn.LeakyReLU(self.leaky_alpha, inplace=True),
@@ -159,67 +159,72 @@ class S2Model(nn.Module):
         )
         grid_so3 = so3_near_identity_grid(max_beta=np.pi / 16, max_gamma=0, n_alpha=4, n_beta=2, n_gamma=1)
         self.layer2 = nn.Sequential(
-            SO3Convolution(32, 32, 32, 16, grid_so3),
-            nn.GroupNorm(2, 32),
+            SO3Convolution(48, 48, 32, 16, grid_so3),
+            nn.GroupNorm(2, 48),
             nn.LeakyReLU(self.leaky_alpha, inplace=True),
-            SO3Convolution(32, 64, 16, 16, grid_so3),
+            SO3Convolution(48, 64, 16, 16, grid_so3),
             nn.GroupNorm(4, 64),
             nn.LeakyReLU(self.leaky_alpha, inplace=True),
 
         )
         grid_so3 = so3_near_identity_grid(max_beta=np.pi / 8, max_gamma=0, n_alpha=4, n_beta=2, n_gamma=1)
         self.layer3 = nn.Sequential(
-            SO3Convolution(64, 64, 16, 8, grid_so3),
-            nn.GroupNorm(4, 64),
+            SO3Convolution(96, 96, 16, 8, grid_so3),
+            nn.GroupNorm(4, 96),
             nn.LeakyReLU(self.leaky_alpha, inplace=True),
-            SO3Convolution(64, 128, 8, 8, grid_so3),
+            SO3Convolution(96, 128, 8, 8, grid_so3),
             nn.GroupNorm(8, 128),
             nn.LeakyReLU(self.leaky_alpha, inplace=True),
         )
         grid_so3 = so3_near_identity_grid(max_beta=np.pi / 16, max_gamma=0, n_alpha=4, n_beta=2, n_gamma=1)
         self.layer4 = nn.Sequential(
-            SO3Convolution(128, 128, 8, 8, grid_so3),
-            nn.GroupNorm(2, 32),
+            SO3Convolution(144, 144, 8, 8, grid_so3),
+            nn.GroupNorm(8, 144),
             nn.LeakyReLU(self.leaky_alpha, inplace=True)
         )
 
-        self.score_layers = nn.Sequential(
-            nn.Conv2d(128, 64, 3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(64),
-            nn.MaxPool2d(2, 2),
-            nn.LeakyReLU(self.leaky_alpha, inplace=True),
-            nn.Conv2d(64, 32, 3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(32),
-            nn.MaxPool2d(2, 2),
-            nn.AdaptiveAvgPool2d(1)
-        )
+        # self.score_layers = nn.Sequential(
+        #     nn.Conv2d(128, 64, 3, stride=2, padding=1, bias=False),
+        #     nn.BatchNorm2d(64),
+        #     nn.MaxPool2d(2, 2),
+        #     nn.LeakyReLU(self.leaky_alpha, inplace=True),
+        #     nn.Conv2d(64, 32, 3, stride=2, padding=1, bias=False),
+        #     nn.BatchNorm2d(32),
+        #     nn.MaxPool2d(2, 2),
+        #     nn.AdaptiveAvgPool2d(1)
+        # )
 
         self.fc = nn.Sequential(
-            nn.Linear(32, 16, bias=False),
-            nn.GroupNorm(1, 16),
-            nn.Linear(16, 1)
+            nn.Linear(589824, 32, bias=False),
+            nn.GroupNorm(1, 32),
+            nn.Linear(32, 1)
 
         )
 
 
     def forward(self, x):
-        # x = self.layer0(x)
-        # x = self.layer1(x)
-        # x = self.layer2(x)
-        # x = self.layer3(x)
-        # x = self.layer4(x)
+        x0 = self.layer0(x)  # 1 16 64 64 64
+        x1 = self.layer1(x0)  # 1 32 32 32 32
+        x0 = nn.functional.interpolate(x0, scale_factor=0.5)  # 1 16 32 32 32
+        x2 = self.layer2(torch.cat((x0, x1), 1))  # 1 64 16 16 16
+
+        x1 = nn.functional.interpolate(x1, scale_factor=0.5)  # 1 32 16 16 16
+        x3 = self.layer3(torch.cat((x2, x1), 1))  # 1 128 8 8 8
+
+        x0 = nn.functional.interpolate(x0, scale_factor=0.5**2)  # 1 16 8 8 8
+        x4 = self.layer4(torch.cat((x3, x0), 1))
         # x = x.mean(-1)
         # x = self.score_layers(x)
         # x = x.view(batch_size, -1)
         # y = self.fc(x)
-        for layer in (self.layer0, self.layer1, self.layer2, self.layer3):
-            x = layer(x)
-        x = x.mean(-1)
-        x = self.score_layers(x)
-        x = x.view(batch_size, -1)
+        # for layer in (self.layer0, self.layer1, self.layer2, self.layer3, self.layer4):
+        #     x = layer(x)
+        # x = x.mean(-1)
+        # x = self.score_layers(x)
+        x = x4.view(batch_size, -1)
         y = self.fc(x)
         return y
 
 if __name__=="__main__":
-    train(log_dir='./log', train_interval=2, train_start_frame=10)
-    # test(log_dir='./log', test_interval=2, test_start_frame=1)
+    # train(log_dir='./log', train_interval=2, train_start_frame=10)
+    test(log_dir='./log', test_interval=10, test_start_frame=1)
