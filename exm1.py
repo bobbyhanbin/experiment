@@ -23,9 +23,9 @@ torch.cuda.manual_seed_all(1)
 
 NUM_EPOCHS = 10
 
-LEARNING_RATE = 0.0001
+LEARNING_RATE = 0.001
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-batch_size = 1
+batch_size = 4
 def train(log_dir,train_interval, train_start_frame):
     bandwidth = 128
 
@@ -43,9 +43,10 @@ def train(log_dir,train_interval, train_start_frame):
     ctriterion1 = ctriterion1.to(DEVICE)
     ctriterion2 = ctriterion1.to(DEVICE)
 
+    network.train()
     for epoch in range(NUM_EPOCHS):
         for batch_idx, img_tuple in enumerate(train_loader):
-            network.train()
+
             img_s2, img_ori, _, target = img_tuple
             # x = cv2.cvtColor(img_s2[0].permute(1, 2, 0).numpy(), cv2.COLOR_BGR2RGB)
             # x_ori = cv2.cvtColor(img_ori[0].permute(1, 2, 0).numpy(), cv2.COLOR_BGR2RGB)
@@ -64,7 +65,7 @@ def train(log_dir,train_interval, train_start_frame):
             print('\rEpoch [{0}/{1}], Iter [{2}] Loss: {3:.4f}'.format(
                 epoch + 1, NUM_EPOCHS, batch_idx + 1, loss.item()), end="")
         print("")
-    torch.save(network.state_dict(), './s2model_param_v8_cat.pkl')
+    torch.save(network.state_dict(), './s2model_param_v9_batch.pkl')
     print("done")
         # print("")
         # preds = []
@@ -105,7 +106,7 @@ def test(log_dir, test_interval, test_start_frame):
     targets = []
     network = S2Model()
     network = network.to(DEVICE)
-    network.load_state_dict(torch.load('./s2model_param_v8_cat.pkl'))
+    network.load_state_dict(torch.load('./s2model_param_v9_batch.pkl'))
     network.eval()
 
     length = len(test_set)
@@ -129,7 +130,7 @@ def test(log_dir, test_interval, test_start_frame):
     video_cnt = len(test_set.cum_frame_num)
     pred = [preds[test_set.cum_frame_num_prev[i]:test_set.cum_frame_num[i]].mean() for i in range(video_cnt)]   # the average score of each video
     targets = [targets[test_set.cum_frame_num_prev[i]:test_set.cum_frame_num[i]].mean() for i in range(video_cnt)]
-    np.savetxt(os.path.join(log_dir, 'test_pred_scores_v8.txt'), np.array(pred))
+    np.savetxt(os.path.join(log_dir, 'test_pred_scores_v9.txt'), np.array(pred))
     np.savetxt(os.path.join(log_dir, 'test_targets.txt'), np.array(targets))
     srocc, _ = scipy.stats.spearmanr(pred, targets)
     print(srocc)
@@ -152,34 +153,34 @@ class S2Model(nn.Module):
             SO3Convolution(16, 16, 64, 32, grid_so3),
             nn.GroupNorm(1, 16),
             nn.LeakyReLU(self.leaky_alpha, inplace=True),
-            SO3Convolution(16, 32, 32, 32, grid_so3),
-            nn.GroupNorm(2, 32),
-            nn.LeakyReLU(self.leaky_alpha, inplace=True)
+            # SO3Convolution(16, 32, 32, 32, grid_so3),
+            # nn.GroupNorm(2, 32),
+            # nn.LeakyReLU(self.leaky_alpha, inplace=True)
 
         )
         grid_so3 = so3_near_identity_grid(max_beta=np.pi / 16, max_gamma=0, n_alpha=4, n_beta=2, n_gamma=1)
         self.layer2 = nn.Sequential(
-            SO3Convolution(48, 48, 32, 16, grid_so3),
-            nn.GroupNorm(2, 48),
+            SO3Convolution(16, 32, 32, 16, grid_so3),
+            nn.GroupNorm(2, 32),
             nn.LeakyReLU(self.leaky_alpha, inplace=True),
-            SO3Convolution(48, 64, 16, 16, grid_so3),
-            nn.GroupNorm(4, 64),
-            nn.LeakyReLU(self.leaky_alpha, inplace=True),
+            # SO3Convolution(32, 64, 16, 16, grid_so3),
+            # nn.GroupNorm(4, 64),
+            # nn.LeakyReLU(self.leaky_alpha, inplace=True),
 
         )
         grid_so3 = so3_near_identity_grid(max_beta=np.pi / 8, max_gamma=0, n_alpha=4, n_beta=2, n_gamma=1)
         self.layer3 = nn.Sequential(
-            SO3Convolution(96, 96, 16, 8, grid_so3),
-            nn.GroupNorm(4, 96),
+            SO3Convolution(32, 64, 16, 8, grid_so3),
+            nn.GroupNorm(4, 64),
             nn.LeakyReLU(self.leaky_alpha, inplace=True),
-            SO3Convolution(96, 128, 8, 8, grid_so3),
-            nn.GroupNorm(8, 128),
-            nn.LeakyReLU(self.leaky_alpha, inplace=True),
+            # SO3Convolution(64, 128, 8, 8, grid_so3),
+            # nn.GroupNorm(8, 128),
+            # nn.LeakyReLU(self.leaky_alpha, inplace=True),
         )
         grid_so3 = so3_near_identity_grid(max_beta=np.pi / 16, max_gamma=0, n_alpha=4, n_beta=2, n_gamma=1)
         self.layer4 = nn.Sequential(
-            SO3Convolution(144, 144, 8, 8, grid_so3),
-            nn.GroupNorm(8, 144),
+            SO3Convolution(64, 128, 8, 8, grid_so3),
+            nn.GroupNorm(8, 128),
             nn.LeakyReLU(self.leaky_alpha, inplace=True)
         )
 
@@ -195,7 +196,7 @@ class S2Model(nn.Module):
         # )
 
         self.fc = nn.Sequential(
-            nn.Linear(589824, 32, bias=False),
+            nn.Linear(32768, 32, bias=False),
             nn.GroupNorm(1, 32),
             nn.Linear(32, 1)
 
@@ -203,28 +204,15 @@ class S2Model(nn.Module):
 
 
     def forward(self, x):
-        x0 = self.layer0(x)  # 1 16 64 64 64
-        x1 = self.layer1(x0)  # 1 32 32 32 32
-        x0 = nn.functional.interpolate(x0, scale_factor=0.5)  # 1 16 32 32 32
-        x2 = self.layer2(torch.cat((x0, x1), 1))  # 1 64 16 16 16
 
-        x1 = nn.functional.interpolate(x1, scale_factor=0.5)  # 1 32 16 16 16
-        x3 = self.layer3(torch.cat((x2, x1), 1))  # 1 128 8 8 8
-
-        x0 = nn.functional.interpolate(x0, scale_factor=0.5**2)  # 1 16 8 8 8
-        x4 = self.layer4(torch.cat((x3, x0), 1))
-        # x = x.mean(-1)
+        for layer in (self.layer0, self.layer1, self.layer2, self.layer3, self.layer4):
+            x = layer(x)
+        x = x.mean(-1)
         # x = self.score_layers(x)
-        # x = x.view(batch_size, -1)
-        # y = self.fc(x)
-        # for layer in (self.layer0, self.layer1, self.layer2, self.layer3, self.layer4):
-        #     x = layer(x)
-        # x = x.mean(-1)
-        # x = self.score_layers(x)
-        x = x4.view(batch_size, -1)
+        x = x.view(batch_size, -1)
         y = self.fc(x)
         return y
 
 if __name__=="__main__":
-    # train(log_dir='./log', train_interval=2, train_start_frame=10)
-    test(log_dir='./log', test_interval=10, test_start_frame=1)
+    train(log_dir='./log', train_interval=2, train_start_frame=10)
+    # test(log_dir='./log', test_interval=10, test_start_frame=1)
